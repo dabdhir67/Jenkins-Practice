@@ -6,7 +6,7 @@ pipeline {
   environment {
     APP_NAME = 'static-site'
     HOST_PORT = '8081'
-    // IMAGE_TAG, DOCKER_IMAGE, CONTAINER_NAME are set in Init to avoid cross-ref issues
+    // IMAGE_TAG, DOCKER_IMAGE, CONTAINER_NAME set in Init
   }
 
   stages {
@@ -66,14 +66,20 @@ pipeline {
     stage('Run New Container') {
       steps {
         powershell '''
-          $img  = $env:DOCKER_IMAGE
-          $name = $env:CONTAINER_NAME
-          $port = $env:HOST_PORT
+          $img  = ($env:DOCKER_IMAGE  | ForEach-Object { $_.Trim() })
+          $name = ($env:CONTAINER_NAME| ForEach-Object { $_.Trim() })
+          $port = ($env:HOST_PORT     | ForEach-Object { $_.Trim() })
 
           Write-Host "Will run: name=$name image=$img port=$port"
-          if (-not $img) { Write-Error "DOCKER_IMAGE is empty"; exit 1 }
+          if (-not $img) { throw "DOCKER_IMAGE is empty after trim" }
 
-          docker run -d --name $name -p "$port:80" $img
+          # Build args as an array to avoid any quoting/expansion issues
+          $args = @('run','-d','--name', $name, '-p', "$port:80", $img)
+
+          Write-Host "docker args:"
+          $args | ForEach-Object { Write-Host "  > '$_'" }
+
+          & docker @args
         '''
       }
     }
@@ -106,7 +112,6 @@ pipeline {
       echo "Deployed: http://localhost:${env.HOST_PORT}"
     }
     always {
-      // Don’t let post fail the build
       powershell '''
         Write-Host "---- docker images (top 15) ----"
         docker images | Select-Object -First 15 | Format-Table | Out-String | Write-Host
