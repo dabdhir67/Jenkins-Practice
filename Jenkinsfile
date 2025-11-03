@@ -50,7 +50,7 @@ pipeline {
     stage('Stop & Remove Old Container (if exists)') {
       steps {
         powershell '''
-          $name = $env:CONTAINER_NAME
+          $name = $env:CONTAINER_NAME.Trim()
           $cid = docker ps -aq -f "name=^$name$"
           if ($cid) {
             Write-Host "Removing old container $name ($cid)"
@@ -66,14 +66,15 @@ pipeline {
     stage('Run New Container') {
       steps {
         powershell '''
-          $img  = ($env:DOCKER_IMAGE  | ForEach-Object { $_.Trim() })
-          $name = ($env:CONTAINER_NAME| ForEach-Object { $_.Trim() })
-          $port = ($env:HOST_PORT     | ForEach-Object { $_.Trim() })
+          $img  = $env:DOCKER_IMAGE.Trim()
+          $name = $env:CONTAINER_NAME.Trim()
+          $port = $env:HOST_PORT.Trim()
 
           Write-Host "Will run: name=$name image=$img port=$port"
-          if (-not $img) { throw "DOCKER_IMAGE is empty after trim" }
+          if (-not $img)  { throw "DOCKER_IMAGE is empty after trim" }
+          if (-not $port) { throw "HOST_PORT is empty after trim" }
 
-          # Build args as an array to avoid any quoting/expansion issues
+          # Build args as an array to avoid quoting issues
           $args = @('run','-d','--name', $name, '-p', "$port:80", $img)
 
           Write-Host "docker args:"
