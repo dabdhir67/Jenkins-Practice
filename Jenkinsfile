@@ -63,27 +63,29 @@ pipeline {
       }
     }
 
-    stage('Run New Container') {
-      steps {
-        powershell '''
-          $img  = $env:DOCKER_IMAGE.Trim()
-          $name = $env:CONTAINER_NAME.Trim()
-          $port = $env:HOST_PORT.Trim()
+   stage('Run New Container') {
+  steps {
+    powershell '''
+      $img  = [string]$env:DOCKER_IMAGE
+      $name = [string]$env:CONTAINER_NAME
+      $port = [string]$env:HOST_PORT
 
-          Write-Host "Will run: name=$name image=$img port=$port"
-          if (-not $img)  { throw "DOCKER_IMAGE is empty after trim" }
-          if (-not $port) { throw "HOST_PORT is empty after trim" }
+      $map = '{0}:80' -f $port  # build "8081:80" safely
 
-          # Build args as an array to avoid quoting issues
-          $args = @('run','-d','--name', $name, '-p', "$port:80", $img)
+      Write-Host "Will run: name=$name image=$img port=$port (map=$map)"
+      if ([string]::IsNullOrWhiteSpace($img))  { throw "DOCKER_IMAGE empty" }
+      if ([string]::IsNullOrWhiteSpace($map))  { throw "port mapping empty" }
 
-          Write-Host "docker args:"
-          $args | ForEach-Object { Write-Host "  > '$_'" }
+      # Build args as a string array so nothing gets dropped
+      $args = @('run','-d','--name', $name, '-p', $map, $img)
 
-          & docker @args
-        '''
-      }
-    }
+      Write-Host "docker args:"
+      $args | ForEach-Object { Write-Host "  > '$_'" }
+
+      & docker @args
+    '''
+  }
+}
 
     stage('Health Check') {
       steps {
