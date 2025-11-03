@@ -1,13 +1,13 @@
 pipeline {
   agent any
 
+  options { timestamps() }
+
   environment {
     APP_NAME = 'static-site'
     HOST_PORT = '8081'
-    // IMAGE_TAG and DOCKER_IMAGE are computed in the Init stage to avoid cross-ref issues in env{}
+    // IMAGE_TAG, DOCKER_IMAGE, CONTAINER_NAME are set in Init to avoid cross-ref issues
   }
-
-  options { timestamps() }
 
   stages {
     stage('Checkout') {
@@ -17,11 +17,27 @@ pipeline {
     stage('Init') {
       steps {
         script {
-          env.IMAGE_TAG     = "${env.BUILD_NUMBER}"
-          env.CONTAINER_NAME = env.APP_NAME
-          env.DOCKER_IMAGE   = "local/${env.APP_NAME}:${env.IMAGE_TAG}"
-          echo "Image: ${env.DOCKER_IMAGE}  Container: ${env.CONTAINER_NAME}  Port: ${env.HOST_PORT}"
+          env.IMAGE_TAG       = "${env.BUILD_NUMBER}"
+          env.CONTAINER_NAME  = env.APP_NAME
+          env.DOCKER_IMAGE    = "local/${env.APP_NAME}:${env.IMAGE_TAG}"
         }
+        powershell '''
+          Write-Host "Image: $($env:DOCKER_IMAGE)"
+          Write-Host "Container: $($env:CONTAINER_NAME)"
+          Write-Host "Port: $($env:HOST_PORT)"
+        '''
+      }
+    }
+
+    stage('Verify Docker & Vars') {
+      steps {
+        powershell '''
+          docker version
+          docker info | Out-Null
+          if (-not $env:DOCKER_IMAGE)   { throw "DOCKER_IMAGE not set" }
+          if (-not $env:CONTAINER_NAME) { throw "CONTAINER_NAME not set" }
+          if (-not $env:HOST_PORT)      { throw "HOST_PORT not set" }
+        '''
       }
     }
 
@@ -34,8 +50,14 @@ pipeline {
     stage('Stop & Remove Old Container (if exists)') {
       steps {
         powershell '''
-          $id = docker ps -aq -f "name=^$env:CONTAINER_NAME$"
-          if ($id) { docker rm -f $env:CONTAINER_NAME | Out-Null }
+          $name = $env:CONTAINER_NAME
+          $cid = docker ps -aq -f "name=^$name$"
+          if ($cid) {
+            Write-Host "Removing old container $name ($cid)"
+            docker rm -f $name | Out-Null
+          } else {
+            Write-Host "No existing container named $name"
+          }
           exit 0
         '''
       }
@@ -43,7 +65,16 @@ pipeline {
 
     stage('Run New Container') {
       steps {
-        powershell 'docker run -d --name $env:CONTAINER_NAME -p $env:HOST_PORT:80 $env:DOCKER_IMAGE'
+        powershell '''
+          $img  = $env:DOCKER_IMAGE
+          $name = $env:CONTAINER_NAME
+          $port = $env:HOST_PORT
+
+          Write-Host "Will run: name=$name image=$img port=$port"
+          if (-not $img) { Write-Error "DOCKER_IMAGE is empty"; exit 1 }
+
+          docker run -d --name $name -p "$port:80" $img
+        '''
       }
     }
 
@@ -54,10 +85,16 @@ pipeline {
           for ($i=0; $i -lt $tries; $i++) {
             try {
               $r = Invoke-WebRequest -UseBasicParsing -Uri ("http://localhost:" + $env:HOST_PORT) -TimeoutSec 5
-              if ($r.StatusCode -eq 200) { exit 0 }
-            } catch { Start-Sleep -Seconds 2 }
+              if ($r.StatusCode -eq 200) {
+                Write-Host "Health check OK"
+                exit 0
+              }
+            } catch {
+              Start-Sleep -Seconds 2
+            }
           }
-          docker logs $env:CONTAINER_NAME
+          Write-Host "----- Container logs -----"
+          docker logs $env:CONTAINER_NAME | Out-Host
           Write-Error "Health check failed: site not responding on http://localhost:$($env:HOST_PORT)"
         '''
       }
@@ -69,10 +106,14 @@ pipeline {
       echo "Deployed: http://localhost:${env.HOST_PORT}"
     }
     always {
-      powershell 'docker images | Select-Object -First 15'
-      powershell 'docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Ports}}"'
-      // Never fail the build because of post steps:
-      powershell 'exit 0'
+      // Don’t let post fail the build
+      powershell '''
+        Write-Host "---- docker images (top 15) ----"
+        docker images | Select-Object -First 15 | Format-Table | Out-String | Write-Host
+        Write-Host "---- docker ps ----"
+        docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Ports}}" | Write-Host
+        exit 0
+      '''
     }
   }
 }
